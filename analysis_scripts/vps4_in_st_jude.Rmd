@@ -1,0 +1,362 @@
+---
+title: "VPS4A/B in RMS from St Jude"
+author: "Guillaume Kugener"
+date: "6/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/gkugener/RScripts/load_libraries_and_annotations.R')
+```
+
+We are interested in seeing if there is 18q/VPS4B loss in RMS. We previously attempted to look at CN loss in an RMS dataset that used SOLID sequencing. However, our results were inconclusive due to problems with the quality of the data. We expected the data from St Jude's to be of much higher quality and that we should get a better sense of the CN profile of these tumors from this dataset.
+
+```{r}
+plot_saving_directory <- '~/Documents/gkugener/VPS4A/plots/vps4_in_st_jude/'
+dir.create(plot_saving_directory)
+```
+
+TODOS:
+
+* Check the seg files in IGV look for hypo diploid samples with large gains/losses
+* Before plotting - check on the sample metadata and remove some samples that are PDXs etc...
+* Possibly run ABSOLUTE to get ploidy and whole genome doubling calls
+* Summary figure of heatmap on 18q/SMAD4 sorted by deepest deletions
+
+```{r}
+st.jude.sample.info <- load.from.taiga(data.name='sample-annotations-7ca1', data.version=2, data.file='sample.info')
+
+# Load the St Jude WES and WGS copy number data
+st.jude.provided.bed.gene.cn <- load.from.taiga(data.name='copy-number-d4d9', data.version=6, data.file='st.jude.provided.bed.gene.cn')
+st.jude.provided.bed.segmented.cn <- load.from.taiga(data.name='copy-number-d4d9', data.version=6, data.file='st.jude.provided.bed.segmented.cn')
+wes.st.jude.gene.cn <- load.from.taiga(data.name='copy-number-d4d9', data.version=6, data.file='wes.st.jude.gene.cn')
+wes.st.jude.segmented.cn <- load.from.taiga(data.name='copy-number-d4d9', data.version=6, data.file='wes.st.jude.segmented.cn')
+wgs.st.jude.gene <- load.from.taiga(data.name='copy-number-d4d9', data.version=6, data.file='wgs.st.jude.gene')
+wgs.st.jude.segmented <- load.from.taiga(data.name='copy-number-d4d9', data.version=6, data.file='wgs.st.jude.segmented')
+
+cyto_band_file <- '~/Documents/Analysis/RScripts/Common_annotations/hg38_cytoband.gz'
+```
+
+```{r}
+total_segments_per_sample <- rbind(
+  wgs.st.jude.segmented %>%
+    dplyr::rename(Sample=DepMap_ID) %>%
+    group_by(Sample) %>%
+    dplyr::summarise(count=n()) %>%
+    mutate(Source='WGS'),
+  wes.st.jude.segmented.cn %>%
+    group_by(Sample) %>%
+    dplyr::summarise(count=n()) %>%
+    mutate(Source='WES'),
+  st.jude.provided.bed.segmented.cn %>%
+    group_by(Sample) %>%
+    dplyr::summarise(count=n()) %>%
+    mutate(Source='BED')
+)
+```
+
+Distribution of total unique segments counted per sample across sources (to see if there are an extreme outliers)
+
+```{r}
+# Plot distribution of 
+ggplot(total_segments_per_sample, aes(count, fill=Source)) +
+  geom_histogram(position = 'identity', alpha=0.5)
+```
+
+## IGV style plots
+
+The plots below give us a sense of the copy number profile of the samples 
+
+```{r}
+# Function that converts the segmented data to be continuous (so can plot chromosomes in 1, 2, 3, 4... order)
+generate_chromosome_cutoffs_list <- function(cyto_band_file) {
+  # Have to edit the chr values to 
+  chr_bp_cutoffs <- read_tsv(cyto_band_file, col_names = F)
+  cutoffs <- chr_bp_cutoffs %>% 
+    group_by(X1) %>% 
+    dplyr::summarize(pos=max(X3)) %>%
+    mutate(X1=gsub('chr', '', X1)) %$% 
+    setNames(pos, ifelse(X1 %in% seq(1,21), paste0('chr', as.integer(X1) + 1), ifelse(X1==22, 'chrX', ifelse(X1=='X', 'chrY', 'chrZ'))))
+  
+  cutoffs_final <- cutoffs[paste0('chr',c(seq(2, 22), 'X', 'Y'))] %>% cumsum()
+  cutoffs_final['chr1'] = 0
+  
+  return(cutoffs_final)
+}
+```
+
+```{r}
+chr_cutoffs <- generate_chromosome_cutoffs_list(cyto_band_file = cyto_band_file)
+columns_for_segment_plotting <- c('Sample', 'Chromosome', 'Start', 'End', 'Segment_Mean', 'Source')
+
+continuous.wes.st.jude.segmented.cn <- wes.st.jude.segmented.cn %>%
+  mutate(Start=Start+chr_cutoffs[paste0('chr', gsub('^chr', '', Chromosome))], End=End+chr_cutoffs[paste0('chr', gsub('^chr', '', Chromosome))]) %>%
+  mutate(Source='WES') %>%
+  dplyr::select(columns_for_segment_plotting)
+continuous.wgs.st.jude.segmented.cn <- wgs.st.jude.segmented %>%
+  mutate(Start=start+chr_cutoffs[paste0('chr', gsub('^chr', '', seqnames))], End=end+chr_cutoffs[paste0('chr', gsub('^chr', '', seqnames))]) %>%
+  mutate(Source='WGS') %>%
+  dplyr::rename(Sample=DepMap_ID, Chromosome=seqnames) %>%
+  dplyr::select(columns_for_segment_plotting)
+continuous.provided.bed.st.jude.segmented.cn <- st.jude.provided.bed.segmented.cn %>%
+  mutate(Start=Start+chr_cutoffs[paste0('chr', gsub('^chr', '', Chromosome))], End=End+chr_cutoffs[paste0('chr', gsub('^chr', '', Chromosome))]) %>%
+  dplyr::select(columns_for_segment_plotting)
+```
+
+```{r}
+combined_segments_all_sources <- rbind(continuous.wes.st.jude.segmented.cn, continuous.wgs.st.jude.segmented.cn, continuous.provided.bed.st.jude.segmented.cn)
+```
+
+```{r}
+# Plot the data
+# (1) Filter out all the germline samples
+tumor_samples_only <- st.jude.sample.info %>% filter(sample_type != 'Germline') %$% sample_name
+tumor_segments_only <- combined_segments_all_sources %>% filter(Sample %in% tumor_samples_only)
+
+# (2) Order the tumor samples
+sample_order_for_plot <- unique(tumor_segments_only$Sample)
+
+# Plot
+tumor_segments_only %<>% mutate(CN_capped=ifelse(log2(Segment_Mean) > 1, 1, ifelse(log2(Segment_Mean) < -1, -1, log2(Segment_Mean))))
+tumor_segments_only %<>% mutate(Sample=factor(Sample, levels=sample_order_for_plot))
+sample_labels <- setNames(seq(1, length(sample_order_for_plot)), sample_order_for_plot)
+```
+
+```{r fig.height=7}
+continuous_chromosome_plots_all <- ggplot(tumor_segments_only) +
+  geom_rect(aes(xmin=Start, xmax=End, ymin=as.integer(Sample)-0.5, ymax=as.integer(Sample)+0.5, fill=CN_capped)) +
+  scale_fill_gradient2(low='blue', high='red', mid='white', midpoint=0) +
+  scale_x_continuous(breaks=chr_cutoffs, labels=names(chr_cutoffs)) +
+  scale_y_continuous(breaks=sample_labels, labels=names(sample_labels)) +
+  facet_wrap(~Source, ncol = 1) +
+  theme(
+    axis.text.x = element_text(angle=90, hjust=1, vjust=0.5, size=10),
+    axis.text.y = element_text(size=10)
+  )
+
+continuous_chromosome_plots_all
+
+ggsave(continuous_chromosome_plots_all, filename = file.path(plot_saving_directory, 'continuous_segments_complete_all_source.pdf'), width=10, height = 30)
+```
+
+```{r}
+# For samples from more than one source, plot them next to each other
+source_order <- c('BED', 'WES', 'WGS') %>% setNames(seq(1, length(.)), .)
+multiple_source_samples <- tumor_segments_only %>% 
+  group_by(Sample) %>%
+  mutate(Num_Source=length(unique(Source))) %>%
+  filter(Num_Source > 1) %>%
+  mutate(Source=factor(Source, levels=names(source_order)))
+
+continuous_across_sources <- ggplot(multiple_source_samples) +
+  geom_rect(aes(xmin=Start, xmax=End, ymin=as.integer(Source)-0.5, ymax=as.integer(Source)+0.5, fill=CN_capped)) +
+  scale_fill_gradient2(low='blue', high='red', mid='white', midpoint=0) +
+  scale_x_continuous(breaks=chr_cutoffs, labels=names(chr_cutoffs)) +
+  scale_y_continuous(breaks=source_order, labels=names(source_order)) +
+  facet_wrap(~Sample, ncol=2) +
+  theme(
+    axis.text.x = element_text(angle=90, hjust=1, vjust=0.5, size=10),
+    axis.text.y = element_text(size=10),
+    legend.position = 'bottom'
+  )
+
+continuous_across_sources
+
+ggsave(continuous_across_sources, filename = file.path(plot_saving_directory, 'continuous_segments_across_sources.pdf'), width=10, height = 10)
+```
+
+Aside from visual comparisons, we can look at the differences in gene level calls to assess the sample similarity
+
+```{r}
+calculate_gene_level_differences_samples <- function(gl1, gl2) {
+  common_samples <- intersect(row.names(gl1), row.names(gl2))
+  common_genes <- intersect(colnames(gl1), colnames(gl2))
+  diffs <- log2(2^gl1[common_samples, common_genes]-1) - log2(2^gl2[common_samples, common_genes]-1)
+  
+  corner(log2(2^gl1[common_samples, common_genes]-1))
+  corner(log2(2^gl2[common_samples, common_genes]-1))
+  
+  gl_diffs <- apply(diffs, 1, FUN = function(x) length(x[abs(x) > 0.5])/length(x[!is.na(x)]))  
+  
+  return(gl_diffs)
+}
+```
+
+```{r}
+bed_wes_diffs <- calculate_gene_level_differences_samples(gl1=wes.st.jude.gene.cn, gl2=st.jude.provided.bed.gene.cn)
+bed_wgs_diffs <- calculate_gene_level_differences_samples(gl1=wgs.st.jude.gene, gl2=st.jude.provided.bed.gene.cn)
+wgs_wes_diffs <- calculate_gene_level_differences_samples(gl1=wes.st.jude.gene.cn, gl2=wgs.st.jude.gene)
+
+combined_gene_level_diff_results <- rbind(
+  data.frame(samples=names(bed_wes_diffs), stringsAsFactors = F) %>% mutate(Source='BEDvWES', diff=bed_wes_diffs),
+  data.frame(samples=names(bed_wgs_diffs), stringsAsFactors = F) %>% mutate(Source='BEDvWGS', diff=bed_wgs_diffs),
+  data.frame(samples=names(wgs_wes_diffs), stringsAsFactors = F) %>% mutate(Source='WGSvWES', diff=wgs_wes_diffs)
+) %>% left_join(., st.jude.sample.info %>% dplyr::select(samples=sample_name, attr_sex) %>% distinct(), by='samples')
+```
+
+From the plot below, it appears that there are some inconsistencies between the BED files findings and WES/WGS. WES and WGS agree very well. From looking at the plots above it appears that we can potentially explain the differences in the BED vs. WES/WGS as follows:
+
+* For BED vs WES, SITHB007 and SJRHB010 have copy loss of X in the WES but not BED, which is likely where most of the difference is arising. Given that both of these are male samples, the WES results look more correct.
+* For BED vs. WGS - the extreme outlier samples look like they are off by a consistenct factor. Perhaps the normalization of the copy number of these values was not relative. Otherwise, from the visual plots, the breakpoints agree quite well.
+
+In general, it looks like the WES and WGS are consistent with each other and enough with the BED files (apart from the fraction that values are off by) that we should feel comfortable with the results.
+
+```{r}
+gene_level_diff_plot <- ggplot(combined_gene_level_diff_results, aes(Source, diff)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(color=attr_sex)) +
+  geom_text_repel(aes(label=samples, color=attr_sex), size=5/ggplot2::.pt)
+
+gene_level_diff_plot
+
+ggsave(gene_level_diff_plot, filename = file.path(plot_saving_directory, 'gene_level_diff_plot.pdf'), width = 8, height = 4)
+```
+
+## Visualizing Chromosome 18
+
+We want to visualize the copy number events around VPS4B in RMS tumor samples
+
+```{r}
+combined_chr18_all_sources <- rbind(
+  wes.st.jude.segmented.cn %>%
+    mutate(Source='WES') %>%
+    dplyr::select(columns_for_segment_plotting),
+  wgs.st.jude.segmented %>%
+    mutate(Source='WGS') %>%
+    dplyr::rename(Sample=DepMap_ID, Chromosome=seqnames, Start=start, End=end) %>%
+    dplyr::select(columns_for_segment_plotting),
+  st.jude.provided.bed.segmented.cn %>%
+    dplyr::select(columns_for_segment_plotting)
+) %>% mutate(Chromosome=gsub('chr', '', Chromosome)) %>% filter(Chromosome==18)
+
+vps4b_levels_all_data <- rbind(
+  data.frame(VPS4B=st.jude.provided.bed.gene.cn[,"VPS4B (9525)"]) %>% mutate(s=row.names(.), Source='BED'),
+  data.frame(VPS4B=wes.st.jude.gene.cn[,"VPS4B (9525)"]) %>% mutate(s=row.names(.), Source='WES'),
+  data.frame(VPS4B=wgs.st.jude.gene[,"VPS4B (9525)"]) %>% mutate(s=row.names(.), Source='WGS')
+)
+
+vps4b_lowest_unique_per_type <- vps4b_levels_all_data %>%
+  left_join(., st.jude.sample.info %>% dplyr::select(s=sample_name, sample_type) %>% distinct(), by='s') %>%
+  mutate(subject_name=gsub('_.*', '', s)) %>%
+  group_by(Source, subject_name, sample_type) %>% 
+  top_n(1, -VPS4B) %>% 
+  filter(sample_type != 'Germline') %>%
+  arrange(Source, sample_type, VPS4B) %$%
+  paste0(Source, '_', sample_type, '_', s) %>%
+  setNames(seq(1, length(.)), .)
+```
+
+```{r}
+vps4b_levels_all_data %>% arrange(VPS4B) %$% hist(log2(2^VPS4B-1), 20)
+```
+
+```{r}
+combined_chr18_all_sources %<>% left_join(., st.jude.sample.info %>% dplyr::select(Sample=sample_name, sample_type) %>% distinct(), by='Sample')
+combined_chr18_all_sources %<>% filter(paste0(Source, '_', sample_type, '_', Sample) %in% names(vps4b_lowest_unique_per_type))
+combined_chr18_all_sources %<>% mutate(name=factor(paste0(Source, '_', sample_type, '_', Sample), levels=names(vps4b_lowest_unique_per_type)))
+```
+
+```{r fig.height=6}
+combined_chr18_all_sources %<>% mutate(cn=ifelse(log2(Segment_Mean) > 1, 1, ifelse(log2(Segment_Mean) < -1, -1, log2(Segment_Mean))))
+
+for (s in unique(combined_chr18_all_sources$Source)) {
+  for (st in unique(combined_chr18_all_sources$sample_type)) {
+    plot_data <- combined_chr18_all_sources %>% filter(Source==s, sample_type==st)
+    ycoords_included <- vps4b_lowest_unique_per_type %>% .[names(.) %in% plot_data$name]
+    
+    if (nrow(plot_data) == 0) {
+      next()
+    }
+    
+    g2 <- ggplot(plot_data) +
+      geom_rect(aes(xmin=Start, xmax=End, ymin=as.integer(name)-0.5, ymax=as.integer(name)+0.5, fill=cn)) +
+      scale_fill_gradient2(low='blue', high='red', mid='white', midpoint=0) +
+      # scale_x_continuous(breaks=chr_cutoffs, labels=names(chr_cutoffs)) +
+      scale_y_continuous(breaks=ycoords_included, labels=names(ycoords_included)) +
+      # facet_wrap(Source~sample_type) +
+      theme(
+        axis.text.x = element_text(angle=90, hjust=1, vjust=0.5, size=10),
+        axis.text.y = element_text(size=10),
+        legend.position = 'bottom'
+      )
+    
+    plot(g2)
+  }
+}
+```
+
+```{r fig.height=6}
+all_single_sample_single_plot <- ggplot(combined_chr18_all_sources) +
+  geom_rect(aes(xmin=Start, xmax=End, ymin=as.integer(name)-0.5, ymax=as.integer(name)+0.5, fill=cn)) +
+  scale_fill_gradient2(low='blue', high='red', mid='white', midpoint=0) +
+ # scale_x_continuous(breaks=chr_cutoffs, labels=names(chr_cutoffs)) +
+  scale_y_continuous(breaks=c(vps4b_lowest_unique_per_type, 63,389,190-63,422,519), labels=names(vps4b_lowest_unique_per_type)) +
+  # facet_wrap(Source~sample_type) +
+  theme(
+    axis.text.x = element_text(angle=90, hjust=1, vjust=0.5, size=10),
+    axis.text.y = element_text(size=10),
+    legend.position = 'bottom'
+  )
+
+all_single_sample_single_plot
+
+ggsave(all_single_sample_single_plot, filename = file.path(plot_saving_directory, 'st_jude_chr18.pdf'), height=16, width = 8)
+```
+
+```{r}
+# One per sample chromosome 18 only?
+samples_to_use_one <- vps4b_levels_all_data %>%
+  left_join(., st.jude.sample.info %>% dplyr::select(s=sample_name, sample_type) %>% distinct(), by='s') %>%
+  mutate(subject_name=gsub('_.*', '', s)) %>%
+  group_by(subject_name) %>% 
+  top_n(1, -VPS4B) %>% 
+  filter(sample_type != 'Germline') %>%
+  arrange(VPS4B) %$%
+  paste0(Source, '_', sample_type, '_', s) %>%
+  setNames(seq(1, length(.)), .)
+```
+
+```{r}
+single_sample_continuous <- multiple_source_samples %>% 
+  left_join(., st.jude.sample.info %>% dplyr::select(Sample=sample_name, sample_type) %>% distinct(), by='Sample')
+
+single_sample_continuous %<>% filter(paste0(Source, '_', sample_type, '_', Sample) %in% names(samples_to_use_one))
+single_sample_continuous %<>% mutate(name=factor(paste0(Source, '_', sample_type, '_', Sample), levels=names(samples_to_use_one)))
+single_sample_continuous %<>% mutate(cn=ifelse(log2(Segment_Mean) > 1, 1, ifelse(log2(Segment_Mean) < -1, -1, log2(Segment_Mean))))
+```
+
+```{r}
+ggplot(single_sample_continuous) +
+  geom_rect(aes(xmin=Start, xmax=End, ymin=as.integer(name)-0.5, ymax=as.integer(name)+0.5, fill=cn)) +
+  scale_fill_gradient2(low='blue', high='red', mid='white', midpoint=0) +
+  scale_x_continuous(breaks=chr_cutoffs, labels=names(chr_cutoffs)) +
+  scale_y_continuous(breaks=samples_to_use_one, labels=names(samples_to_use_one)) +
+  # facet_wrap(Source~sample_type) +
+  theme(
+    axis.text.x = element_text(angle=90, hjust=1, vjust=0.5, size=10),
+    axis.text.y = element_text(size=10),
+    legend.position = 'bottom'
+  )
+```
+
+```{r}
+ggplot(single_sample_continuous %>% filter(Chromosome==18)) +
+  geom_rect(aes(xmin=Start, xmax=End, ymin=as.integer(name)-0.5, ymax=as.integer(name)+0.5, fill=cn)) +
+  scale_fill_gradient2(low='blue', high='red', mid='white', midpoint=0) +
+ # scale_x_continuous(breaks=chr_cutoffs, labels=names(chr_cutoffs)) +
+  scale_y_continuous(breaks=samples_to_use_one, labels=names(samples_to_use_one)) +
+  # facet_wrap(Source~sample_type) +
+  theme(
+    axis.text.x = element_text(angle=90, hjust=1, vjust=0.5, size=10),
+    axis.text.y = element_text(size=10),
+    legend.position = 'bottom'
+  )
+```
+
+```{r}
+
+```
+
+
+

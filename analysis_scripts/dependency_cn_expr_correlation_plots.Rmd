@@ -1,0 +1,287 @@
+---
+title: "VPS4A Manuscript Figure 2"
+author: "Guillaume Kugener"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
+source('~/Documents/gkugener/RScripts/load_libraries_and_annotations.R')
+```
+
+```{r echo=TRUE, results='hide'}
+# Download the relevant data (public 19Q2)
+CCLE.gene.cn <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='CCLE_gene_cn')
+CCLE.expression <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='CCLE_expression')
+Achilles.gene.effect <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='Achilles_gene_effect')
+D2_ge <- load.from.taiga(data.name='demeter2-combined-dc9c', data.version=16, data.file='gene_effect')
+
+plot_saving_directory <- '~/Documents/gkugener/VPS4A/plots/dependency_cn_expr_correlation_plots/'
+dir.create(plot_saving_directory)
+```
+
+```{r}
+vps4b_cn <- CCLE.gene.cn[,"VPS4B (9525)"]
+vps4b_expr <- CCLE.expression[,"VPS4B (9525)"]
+vps4b_crispr_dep <- Achilles.gene.effect[,"VPS4B (9525)"]
+vps4b_rnai_dep <- D2_ge[,"VPS4B (9525)"]
+
+vps4a_cn <- CCLE.gene.cn[,"VPS4A (27183)"]
+vps4a_expr <- CCLE.expression[,"VPS4A (27183)"]
+vps4a_crispr_dep <- Achilles.gene.effect[,"VPS4A (27183)"]
+vps4a_rnai_dep <- D2_ge[,"VPS4A (27183)"]
+
+vps4_plotting_data <- data.frame(DepMap_ID=union(row.names(CCLE.gene.cn), row.names(Achilles.gene.effect)), stringsAsFactors = F) %>%
+  dplyr::mutate(VPS4B_CN=vps4b_cn[DepMap_ID]) %>%
+  dplyr::mutate(VPS4B_expr=vps4b_expr[DepMap_ID]) %>%
+  dplyr::mutate(VPS4B_CRISPR_dep=vps4b_crispr_dep[DepMap_ID]) %>%
+  dplyr::mutate(VPS4B_RNAi_dep=vps4b_rnai_dep[DepMap_ID]) %>%
+  
+  dplyr::mutate(VPS4A_CN=vps4a_cn[DepMap_ID]) %>%
+  dplyr::mutate(VPS4A_expr=vps4a_expr[DepMap_ID]) %>%
+  dplyr::mutate(VPS4A_CRISPR_dep=vps4a_crispr_dep[DepMap_ID]) %>%
+  dplyr::mutate(VPS4A_RNAi_dep=vps4a_rnai_dep[DepMap_ID])
+```
+
+```{r}
+# Set themeing properties
+axis_font_size <- 16
+text_size <- 10
+title_size <- 16
+```
+
+### VPS4A dep (CRISPR) vs VPS4B CN
+
+```{r}
+# Compute correltion to include
+cor_vps4a_crispr_dep_v_vps4b_cn <- vps4_plotting_data %>%
+  filter(!is.na(VPS4A_CRISPR_dep), !is.na(VPS4B_CN)) %>%
+  mutate(VPS4B_CN=log2(2^VPS4B_CN-1)) %>%
+  dplyr::summarise(
+    n=n(),
+    R=round(cor.test(VPS4B_CN, VPS4A_CRISPR_dep, method = 'pearson')$estimate, 3),
+    p=formatC(cor.test(VPS4B_CN, VPS4A_CRISPR_dep, method = 'pearson')$p.value, format = 'e', digits = 3)
+  ) %>%
+  mutate(
+    x=min(vps4_plotting_data$VPS4A_CRISPR_dep, na.rm = T),
+    y=max(log2(2^vps4_plotting_data$VPS4B_CN-1), na.rm = T)
+  )
+
+vps4a_crispr_dep_v_vps4b_cn <- ggplot(vps4_plotting_data, aes(VPS4A_CRISPR_dep, log2(2^VPS4B_CN-1))) +
+  geom_point() +
+  geom_text(data=cor_vps4a_crispr_dep_v_vps4b_cn, aes(x, y, label=paste0('R: ', R, '\np=', p, '\nn=', n)), hjust=0, vjust=1) +
+  geom_smooth(method = 'lm', se = F) +
+  xlim(c(min(vps4_plotting_data$VPS4A_CRISPR_dep, na.rm = T)-0.05, max(vps4_plotting_data$VPS4A_CRISPR_dep, na.rm = T)+0.05)) + 
+  ylim(c(min(log2(2^vps4_plotting_data$VPS4B_CN-1), na.rm = T)-0.05, max(log2(2^vps4_plotting_data$VPS4B_CN-1), na.rm = T)+0.05)) + 
+  xlab('VPS4A CERES') +
+  ylab('VPS4B copy number (log2 relative to ploidy)') +
+  theme_Publication() +
+  theme(
+    title = element_text(size=title_size),
+    text = element_text(size=text_size),
+    axis.text = element_text(size=axis_font_size)
+  )
+
+vps4a_crispr_dep_v_vps4b_cn
+
+ggsave(vps4a_crispr_dep_v_vps4b_cn, filename = file.path(plot_saving_directory, 'vps4a_crispr_dep_v_vps4b_cn.pdf'), width = 5, height = 5.5)
+```
+
+### VPS4A dep (RNAi) vs VPS4B CN
+
+```{r}
+# Compute correltion to include
+cor_vps4a_rnai_dep_v_vps4b_cn <- vps4_plotting_data %>%
+  filter(!is.na(VPS4A_RNAi_dep), !is.na(VPS4B_CN)) %>%
+  mutate(VPS4B_CN=log2(2^VPS4B_CN-1)) %>%
+  dplyr::summarise(
+    n=n(),
+    R=round(cor.test(VPS4B_CN, VPS4A_RNAi_dep, method = 'pearson')$estimate, 3),
+    p=formatC(cor.test(VPS4B_CN, VPS4A_RNAi_dep, method = 'pearson')$p.value, format = 'e', digits = 3)
+  ) %>%
+  mutate(
+    x=min(vps4_plotting_data$VPS4A_RNAi_dep, na.rm = T),
+    y=max(log2(2^vps4_plotting_data$VPS4B_CN-1), na.rm = T)
+  )
+
+vps4a_rnai_dep_v_vps4b_cn <- ggplot(vps4_plotting_data, aes(VPS4A_RNAi_dep, log2(2^VPS4B_CN-1))) +
+  geom_point() +
+  geom_text(data=cor_vps4a_rnai_dep_v_vps4b_cn, aes(x, y, label=paste0('R: ', R, '\np=', p, '\nn=', n)), hjust=0, vjust=1) +
+  geom_smooth(method = 'lm', se = F) +
+  xlim(c(min(vps4_plotting_data$VPS4A_RNAi_dep, na.rm = T)-0.05, max(vps4_plotting_data$VPS4A_RNAi_dep, na.rm = T)+0.05)) + 
+  ylim(c(min(log2(2^vps4_plotting_data$VPS4B_CN-1), na.rm = T)-0.05, max(log2(2^vps4_plotting_data$VPS4B_CN-1), na.rm = T)+0.05)) + 
+  xlab('VPS4A DEMETER2') +
+  ylab('VPS4B copy number (log2 relative to ploidy)') +
+  theme_Publication() +
+  theme(
+    title = element_text(size=title_size),
+    text = element_text(size=text_size),
+    axis.text = element_text(size=axis_font_size)
+  )
+
+vps4a_rnai_dep_v_vps4b_cn
+
+ggsave(vps4a_rnai_dep_v_vps4b_cn, filename = file.path(plot_saving_directory, 'vps4a_rnai_dep_v_vps4b_cn.pdf'), width = 5, height = 5.5)
+```
+
+## VPS4B expression vs. VPS4B copy number
+
+```{r}
+vps4b_expr_vps4b_cn_remove_v_low <- vps4_plotting_data %>%
+  filter(!is.na(VPS4B_expr), !is.na(VPS4B_CN)) %>%
+  filter(log2(2^VPS4A_CN-1) > -10)
+
+# Compute correlation to include
+cor_vps4b_expr_v_vps4b_cn <- vps4b_expr_vps4b_cn_remove_v_low %>%
+  mutate(VPS4B_CN=log2(2^VPS4B_CN-1)) %>%
+  dplyr::summarise(
+    n=n(),
+    R=round(cor.test(VPS4B_CN, VPS4B_expr, method = 'pearson')$estimate, 3),
+    p=formatC(cor.test(VPS4B_CN, VPS4B_expr, method = 'pearson')$p.value, format = 'e', digits = 3)
+  ) %>%
+  mutate(
+    y=max(vps4b_expr_vps4b_cn_remove_v_low$VPS4B_expr, na.rm = T),
+    x=min(log2(2^vps4b_expr_vps4b_cn_remove_v_low$VPS4B_CN-1), na.rm = T)
+  )
+
+vps4b_expr_v_vps4b_cn <- ggplot(vps4b_expr_vps4b_cn_remove_v_low %>% filter(!is.na(VPS4B_expr), !is.na(VPS4B_CN)), aes(log2(2^VPS4B_CN-1), VPS4B_expr)) +
+  geom_point() +
+  geom_text(data=cor_vps4b_expr_v_vps4b_cn, aes(x, y, label=paste0('R: ', R, '\np=', p, '\nn=', n)), hjust=0, vjust=1) +
+  geom_smooth(method='lm', se=F) +
+  ggtitle('VPS4B in CCLE') +
+  xlab('VPS4B copy number (log2 relative to ploidy)') +
+  ylab('VPS4B expression (log2(TPM+1))') +
+  ylim(c(min(vps4b_expr_vps4b_cn_remove_v_low$VPS4B_expr, na.rm = T)-0.05, max(vps4b_expr_vps4b_cn_remove_v_low$VPS4B_expr, na.rm = T)+0.05)) + 
+  xlim(c(min(log2(2^vps4b_expr_vps4b_cn_remove_v_low$VPS4B_CN-1), na.rm = T)-0.05, max(log2(2^vps4b_expr_vps4b_cn_remove_v_low$VPS4B_CN-1), na.rm = T)+0.05)) + 
+  theme_Publication() +
+  theme(
+    title = element_text(size=title_size),
+    text = element_text(size=text_size),
+    axis.text = element_text(size=axis_font_size)
+  )
+
+vps4b_expr_v_vps4b_cn
+
+ggsave(vps4b_expr_v_vps4b_cn, filename = file.path(plot_saving_directory, 'VPS4B_expr_v_VPS4B_cn.pdf'), width = 5, height = 5.5)
+```
+
+### VPS4A expression vs. VPS4A copy number
+
+```{r}
+vps4a_expr_vps4a_cn_remove_v_low <- vps4_plotting_data %>%
+  filter(!is.na(VPS4A_expr), !is.na(VPS4A_CN)) %>%
+  filter(log2(2^VPS4A_CN-1) > -10)
+
+# Compute correlation to include
+cor_vps4a_expr_v_vps4a_cn <- vps4a_expr_vps4a_cn_remove_v_low %>%
+  mutate(VPS4A_CN=log2(2^VPS4A_CN-1)) %>%
+  dplyr::summarise(
+    n=n(),
+    R=round(cor.test(VPS4A_CN, VPS4A_expr, method = 'pearson')$estimate, 3),
+    p=formatC(cor.test(VPS4A_CN, VPS4A_expr, method = 'pearson')$p.value, format = 'e', digits = 3)
+  ) %>%
+  mutate(
+    y=max(vps4a_expr_vps4a_cn_remove_v_low$VPS4A_expr, na.rm = T),
+    x=min(log2(2^vps4a_expr_vps4a_cn_remove_v_low$VPS4A_CN-1), na.rm = T)
+  )
+
+vps4a_expr_v_vps4a_cn <- ggplot(vps4a_expr_vps4a_cn_remove_v_low %>% filter(!is.na(VPS4A_expr), !is.na(VPS4A_CN)), aes(log2(2^VPS4A_CN-1), VPS4A_expr)) +
+  geom_point() +
+  geom_text(data=cor_vps4a_expr_v_vps4a_cn, aes(x, y, label=paste0('R: ', R, '\np=', p, '\nn=', n)), hjust=0, vjust=1) +
+  geom_smooth(method='lm', se=F) +
+  ggtitle('VPS4A in CCLE') +
+  xlab('VPS4A copy number (log2 relative to ploidy)') +
+  ylab('VPS4A expression (log2(TPM+1))') +
+  ylim(c(min(vps4a_expr_vps4a_cn_remove_v_low$VPS4A_expr, na.rm = T)-0.05, max(vps4a_expr_vps4a_cn_remove_v_low$VPS4A_expr, na.rm = T)+0.05)) + 
+  xlim(c(min(log2(2^vps4a_expr_vps4a_cn_remove_v_low$VPS4A_CN-1), na.rm = T)-0.05, max(log2(2^vps4a_expr_vps4a_cn_remove_v_low$VPS4A_CN-1), na.rm = T)+0.05)) + 
+  theme_Publication() +
+  theme(
+    title = element_text(size=title_size),
+    text = element_text(size=text_size),
+    axis.text = element_text(size=axis_font_size)
+  )
+
+vps4a_expr_v_vps4a_cn
+
+ggsave(vps4a_expr_v_vps4a_cn, filename = file.path(plot_saving_directory, '/VPS4A_expr_v_VPS4A_cn.pdf'), width = 5, height = 5.5)
+``` 
+
+### VPS4 expression vs. cn vs. other genes
+
+```{r}
+overlapping_cell_lines_cn_tpm <- intersect(row.names(CCLE.gene.cn), row.names(CCLE.expression))
+common_genes_between_two_datatsets <- intersect(colnames(CCLE.gene.cn), colnames(CCLE.expression))
+# Randomly sample 4000 genes from each dataset (including VPS4A and VPS4B in both)
+genes_chosen <- sample(common_genes_between_two_datatsets, size=4000)
+genes_chosen <- c(genes_chosen, c("VPS4A (27183)", "VPS4B (9525)")) %>% unique()
+
+correlations_matrix_cn_rnaseq_dm <- WGCNA::cor(
+  CCLE.gene.cn[overlapping_cell_lines_cn_tpm,genes_chosen],
+  CCLE.expression[overlapping_cell_lines_cn_tpm,genes_chosen],
+  use = 'pairwise.complete', method = 'pearson'
+)
+
+# Look at the distributions (may also want to look at this paralog correlation business)
+correlations_dm_annotated <- NULL
+for (i in seq(1,ncol(correlations_matrix_cn_rnaseq_dm), 2500)) {
+  # print(i)
+  end <- min(i + 2500, ncol(correlations_matrix_cn_rnaseq_dm))
+  correlations_dm_annotated_p <- correlations_matrix_cn_rnaseq_dm[,i:end] %>%
+    as.data.frame() %>%
+    mutate(CN_gene=row.names(.)) %>%
+    gather(Expression_gene, correlation, -CN_gene)
+  
+  if (is.null(correlations_dm_annotated)) {
+    correlations_dm_annotated <- correlations_dm_annotated_p
+  } else {
+    correlations_dm_annotated %<>% rbind(., correlations_dm_annotated_p)
+  }
+}
+
+# correlations_dm_annotated %<>% left_join(., paralogs, by=c('CN_gene', 'Expression_gene'))
+correlations_dm_annotated %<>% mutate(type=factor(case_when(
+#   CN_gene==Expression_gene ~ 'same_gene',
+#   source=='paralog' ~ 'paralogs',
+#   TRUE ~ 'unrelated'
+# ), levels=c('unrelated', 'paralogs', 'same_gene'))) %>%
+#   mutate(type=factor(case_when(
+  CN_gene==Expression_gene ~ 'same gene',
+  # source=='paralog' ~ 'paralogs',
+  TRUE ~ 'different gene'
+), levels=c('different gene', 'same gene')))
+```
+
+```{r}
+vps4ab_annotations_density_plot <- correlations_dm_annotated %>%
+  filter(type != 'different gene') %>%
+  filter(Expression_gene==CN_gene, grepl('VPS4[AB]', CN_gene) | grepl('VPS4[AB]', Expression_gene))
+
+# Label VPS4A/B on the plot
+expression_cn_correlation_plots_vps4ab <- ggplot(correlations_dm_annotated, aes(correlation, fill=type)) +
+  geom_density(alpha=0.5) +
+  geom_point(data=vps4ab_annotations_density_plot, aes(y=0), show.legend = F) +
+  geom_label_repel(data=vps4ab_annotations_density_plot, 
+    aes(y=0, label=paste0(gsub(' .*', '', Expression_gene), ' (Expression) \nand ', gsub(' .*', '', CN_gene), ' (CN)')), 
+    fill=rgb(1,1,1,0.5), force=10, size=10*1/ggplot2:::.pt,
+    arrow = arrow(length = unit(0.03, "npc"))
+  ) +
+  ggtitle('Expression and CN correlation in CCLE') +
+  xlab('Pearson correlation') +
+  guides(fill=guide_legend(title = 'Correlation pair')) +
+  scale_fill_Publication() +
+  theme_Publication() +
+  theme(
+    text = element_text(size=text_size),
+    title = element_text(size=title_size),
+    axis.text = element_text(size = axis_font_size),
+    legend.position = c(1,1),
+    legend.justification = c(1,1)
+  )
+
+expression_cn_correlation_plots_vps4ab
+
+ggsave(expression_cn_correlation_plots_vps4ab, filename = file.path(plot_saving_directory, 'correlations_expr_cn.pdf'), width=16, height=12, units='cm')
+```
+
+

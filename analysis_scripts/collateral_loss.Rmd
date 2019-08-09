@@ -1,0 +1,163 @@
+---
+title: "Collateral loss with TSGs"
+author: "Guillaume Kugener"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/gkugener/RScripts/load_libraries_and_annotations.R')
+```
+
+Generate a collateral loss feature. For each TSG gene, we take all the genes on that are on the same chromosomal arm and determine if it is also lost.
+
+```{r echo=TRUE, results='hide'}
+CCLE.expression <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='CCLE_expression')
+CCLE.gene.cn <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='CCLE_gene_cn')
+
+# NOTE: we are using hg19 in this script, because the public dataset is hg19
+# This function comes from the load_libraries_and_annotations.R script included in this repo
+genome_version <- ifelse(ncol(CCLE.gene.cn)==23299, 'hg19', 'hg38')
+allENTREZG <- load_gene_mapping(genome_version = genome_version)
+cyto_band_file <- ifelse(
+  genome_version=='hg19',
+  '~/Documents/Analysis/RScripts/Common_annotations/hg19_cytoBand.txt.gz',
+  '~/Documents/Analysis/RScripts/Common_annotations/hg38_cytoBand.txt.gz'
+)
+```
+
+```{r echo=TRUE, results='hide'}
+# Annotations we will use for the TSGs
+TSG <- load.from.taiga(data.name='oncokb-annotations-2b59', data.version=2, data.file='TSG') %>%
+  mutate(gene_id=as.numeric(stringr::str_extract(pattern='[0-9]+', string=gsub('.* ', '', CDS_ID))))
+
+# Read in LOF table (this file is provided by Mike Burger)
+lof_table <- load.from.taiga(data.name='co-loss-feature-matrix-beb8', data.version=3, data.file='LOF-all')
+
+data_saving_directory <- '~/Documents/gkugener/VPS4A/data/collateral_loss/'
+dir.create(data_saving_directory)
+```
+
+```{r echo=TRUE, results='hide'}
+loss_threshold <- -0.5
+```
+
+```{r}
+arm_cutoffs <- read_tsv(cyto_band_file, col_names = F) %>%
+  filter(grepl('p', X4)) %>%
+  group_by(X1) %>%
+  dplyr::summarise(cutoff=max(X3)) %$%
+  setNames(cutoff,X1)
+
+# Load the gene coordinates (pull from the CN prioritized data)
+allENTREZG %<>% mutate(arms=ifelse(CHRLOCEND < arm_cutoffs[paste0('chr', CHR)], 'p', 'q')) %>%
+  mutate(EGID=as.numeric(EGID))
+
+# And then join on CHR, arms for the remaining genes
+annotated_pairs_tsg_colost <- TSG %>%
+  left_join(., allENTREZG %>% dplyr::select(gene_id=EGID, CHR, CHRLOC, CHRLOCEND, arms), by='gene_id') %>%
+  arrange(CHR, CHRLOC, arms) %>%
+  dplyr::rename(TSG_ID=gene_id) %>%
+  left_join(., allENTREZG %>% dplyr::select(neighbor_gene_id=EGID, SYMBOL, CHR, neighbor_start=CHRLOC, neighbor_end=CHRLOCEND, arms), by=c('CHR', 'arms')) %>%
+  mutate(TSG_SYMBOL=gsub(' .*', '', CDS_ID)) %>%
+  dplyr::select(TSG_SYMBOL, TSG_ID, NEIGHBOR_SYMBOL=SYMBOL, NEIGHBOR_ID=neighbor_gene_id, CHR, arm=arms, TSG_start=CHRLOC, neighbor_start, neighbor_end) %>% 
+  mutate(distance_to_TSG_start=case_when(
+    abs(TSG_start - neighbor_start) < abs(TSG_start - neighbor_end) ~ as.double(TSG_start - neighbor_start),
+    abs(TSG_start - neighbor_start) > abs(TSG_start - neighbor_end) ~ as.double(TSG_start - neighbor_end),
+    TRUE ~ 0
+  )) %>%
+  dplyr::select(TSG_SYMBOL, TSG_ID, NEIGHBOR_SYMBOL, NEIGHBOR_ID, CHR, arm, distance_to_TSG_start) %>%
+  filter(TSG_ID != NEIGHBOR_ID) %>%
+  # filter(grepl('SMAD4', TSG), grepl('SMAD4', NEIGHBOR))
+  arrange(distance_to_TSG_start)
+```
+
+```{r}
+# z-score per gene
+# define not expressed as 0.2
+# CCLE.expression.z <- apply(CCLE.expression, 2, scale)
+
+# Prepped for joining
+expression_prepped <- CCLE.expression %>%
+  as.data.frame() %>%
+  mutate(DepMap_ID=row.names(.)) %>%
+  gather(g, NEIGHBOR_log2_tpm, -DepMap_ID) %>%
+  mutate(NEIGHBOR_ID=stringr::str_extract(pattern='[0-9]+', string=gsub('.* ', '', g))) %>%
+  dplyr::select(-g) %>%
+  group_by(NEIGHBOR_ID) %>%
+  dplyr::mutate(NEIGHBOR_log2_tpm_z=scale(NEIGHBOR_log2_tpm))
+```
+
+```{r}
+# Now join with copy number data
+public_cn <- CCLE.gene.cn %>%
+  t() %>%
+  as.data.frame() %>%
+  mutate(gene_id=as.numeric(stringr::str_extract(pattern='[0-9]+', string=gsub('.* ', '', row.names(.))))) %>%
+  dplyr::select(gene_id, everything()) %>%
+  gather(DepMap_ID, cn, -gene_id) %>%
+  mutate(cn=log2(2^cn-1))
+
+lof_table_melted <- lof_table %>%
+  gather(gene_id, LOF, -Row.name) %>%
+  dplyr::rename(DepMap_ID=Row.name) %>%
+  mutate(gene_id=as.numeric(gene_id))
+
+colost_cases <- annotated_pairs_tsg_colost %>%
+  filter(NEIGHBOR_ID %in% colnames(lof_table)) %>%
+  # filter(abs(distance_to_TSG_start) < 10^4) %>%
+  # Only care about cases with a loss in the TSG
+  left_join(., public_cn %>% 
+              filter(cn < loss_threshold) %>%
+              dplyr::select(TSG_ID=gene_id, DepMap_ID, TSG_cn=cn), by='TSG_ID') %>%
+  left_join(., lof_table_melted %>% dplyr::rename(TSG_ID=gene_id, TSG_LOF=LOF), by=c('TSG_ID', 'DepMap_ID')) %>%
+  left_join(., public_cn %>% dplyr::select(NEIGHBOR_ID=gene_id, DepMap_ID, NEIGHBOR_cn=cn), by=c('NEIGHBOR_ID', 'DepMap_ID')) %>%
+  # Add the expression features here
+  left_join(., expression_prepped %>% ungroup() %>% mutate(NEIGHBOR_ID=as.numeric(NEIGHBOR_ID)), by=c('DepMap_ID', 'NEIGHBOR_ID')) %>%
+  left_join(., lof_table_melted %>% dplyr::rename(NEIGHBOR_ID=gene_id, NEIGHBOR_LOF=LOF), by=c('NEIGHBOR_ID', 'DepMap_ID'))
+```
+
+```{r}
+# This uses the strict value (LOF==1)
+# TSG CN loss & CN loss of gene & LOF ==1 of gene (in group)
+colost_cases_clean <- colost_cases %>%
+  filter(TSG_cn < loss_threshold, NEIGHBOR_cn < loss_threshold, NEIGHBOR_LOF==1) %>%
+  mutate(value=1) %>%
+  distinct(DepMap_ID, NEIGHBOR_ID, value)
+
+# Add the LOF==0 out group
+co_loss_matrix_prepped <- rbind(colost_cases_clean, 
+  lof_table_melted %>% 
+    dplyr::filter(LOF==0) %>% 
+    dplyr::select(DepMap_ID, NEIGHBOR_ID=gene_id, value=LOF)) %>%
+  dcast(DepMap_ID ~ NEIGHBOR_ID, value.var='value') %>%
+  column_to_rownames(var='DepMap_ID')
+
+write.table(co_loss_matrix_prepped, file = file.path(data_saving_directory, 'collateral_loss_cn_lof.tsv'), sep = '\t', quote = F, row.names = T)
+```
+
+```{r}
+# This uses a slightly more permissive filter (not requiring LOF==1 for the neighor gene)
+colost_cases_clean_less_strict <- colost_cases %>%
+  filter(TSG_cn < loss_threshold, NEIGHBOR_cn < loss_threshold) %>%
+  mutate(value=1) %>%
+  distinct(DepMap_ID, NEIGHBOR_ID, value)
+
+# Add the LOF==0 out group
+co_loss_matrix_less_strict_prepped <- rbind(colost_cases_clean_less_strict, 
+  lof_table_melted %>% 
+    dplyr::filter(LOF==0) %>% 
+    filter(!(paste0(DepMap_ID, '_', gene_id) %in% (colost_cases_clean_less_strict %$% paste0(DepMap_ID, '_', NEIGHBOR_ID)))) %>%
+    dplyr::select(DepMap_ID, NEIGHBOR_ID=gene_id, value=LOF)) %>%
+  dcast(DepMap_ID ~ NEIGHBOR_ID, value.var='value') %>%
+  column_to_rownames(var='DepMap_ID')
+
+
+write.table(
+  co_loss_matrix_less_strict_prepped, file = file.path(data_saving_directory, 'collateral_loss_cn_only.tsv'),
+  sep = '\t', quote = F, row.names = T)
+```
+
+
+

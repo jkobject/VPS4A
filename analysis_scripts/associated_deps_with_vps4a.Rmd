@@ -1,0 +1,234 @@
+---
+title: "Correlated dependencies with VPS4A dependency"
+author: "Guillaume Kugener"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+source('~/Documents/gkugener/RScripts/load_libraries_and_annotations.R')
+```
+
+## Objective
+
+```{r, message=F, warning=F, echo=TRUE, results='hide'}
+plot_saving_directory <- '~/Documents/gkugener/VPS4A/plots/associated_deps_with_vps4a/'
+dir.create(plot_saving_directory)
+```
+
+In this anlaysis we are interested in looking at dependencies that may be associated with VPS4A/B features.
+
+```{r echo=TRUE, results='hide', message=F, warning=F}
+gene.effect.corrected <- load.from.taiga(data.name='avana-public-tentative-19q2-2025', data.version=1, data.file='gene_effect')
+public.CCLE.expression <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='CCLE_expression')
+public.CCLE.gene.cn <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='CCLE_gene_cn')
+```
+
+```{r}
+vps4_cn <- log2(2^public.CCLE.gene.cn[,c("VPS4A (27183)", "VPS4B (9525)")]-1) %>% 
+  as.data.frame() %>% 
+  mutate(DepMap_ID=row.names(.)) %>%
+  mutate(VPS4A_B=log2(2^get("VPS4A (27183)") + 2^get("VPS4B (9525)") + 1)) %>%
+  set_rownames(.$DepMap_ID)
+
+vps4_expression <- public.CCLE.expression[,c("VPS4A (27183)", "VPS4B (9525)")] %>% 
+  as.data.frame() %>% 
+  mutate(DepMap_ID=row.names(.)) %>%
+  mutate(VPS4A_B=log2(2^get("VPS4A (27183)") + 2^get("VPS4B (9525)"))) %>%
+  set_rownames(.$DepMap_ID)
+```
+
+```{r include=FALSE}
+overlapping_lines_ge_expression <- intersect(row.names(gene.effect.corrected), vps4_expression$DepMap_ID)
+pan.dependent.genes.corrected <- load.from.taiga(data.name='avana-public-tentative-19q2-2025', data.version=1, data.file='pan_dependent_genes')
+
+# Now correlate with dependency and see what comes up
+correlations_with_dependencies <- run_lm_stats_limma(gene.effect.corrected[overlapping_lines_ge_expression,], vps4_expression[overlapping_lines_ge_expression, "VPS4A_B"]) %>%
+  mutate(Group=ifelse(Gene %in% pan.dependent.genes.corrected$gene, 'Common essential', NA))
+```
+
+### VPS4 combined expression
+
+We create a feature here where we calculate a combined VPS4 expression (log2(VPS4A TPM + VPS4B TPM)). We correlated this expression feature with dependencies in the Avana dataset (above).
+
+```{r include=TRUE}
+p6 <- ggplot(correlations_with_dependencies, aes(EffectSize, -log10(p.value), color=Group)) +
+  geom_point() +
+  geom_point(data=correlations_with_dependencies %>% filter(grepl('VPS4[AB]', Gene)), color='red') +
+  geom_text_repel(data=correlations_with_dependencies %>% filter(grepl('VPS4[AB]', Gene)), aes(label=gsub(' .*', '', Gene)), color='black') +
+  ggtitle('Dependency vs. combined VPS4A/B expression') +
+  guides(color=guide_legend(override.aes = list(size=2))) +
+  scale_color_Publication(breaks=c('Common essential'), na.value='grey') +
+  theme_Publication() + theme(legend.position = 'top', legend.justification = 'left')
+
+p6
+
+ggsave(
+  p6, filename = file.path(plot_saving_directory,'dep_vs_vps4ab_expr.pdf'), device = 'pdf',
+  width = 6, height = 6
+)
+```
+
+The table below highlights the top 200 correlated genes (positive or negative) by p.value
+
+```{r include=TRUE}
+correlations_with_dependencies %>%
+  dplyr::select(Gene, Group, everything()) %>%
+  top_n(200, -log10(p.value)) %>%
+  mutate_if(is.numeric, list(~round(.,3))) %>%
+  datatable(options=list(scrollX=T), filter='top')
+```
+
+```{r}
+overlapping_lines_ge_cn <- intersect(row.names(gene.effect.corrected), vps4_cn$DepMap_ID)
+
+# Now correlate with dependency and see what comes up
+correlations_with_dependencies_cn <- run_lm_stats_limma(gene.effect.corrected[overlapping_lines_ge_cn,], vps4_cn[overlapping_lines_ge_cn, "VPS4A_B"]) %>%
+  mutate(Group=ifelse(Gene %in% pan.dependent.genes.corrected$gene, 'Common essential', NA))
+```
+
+### VPS4 combined copy number 
+
+We create a feature here where we calculate a combined VPS4 copy number (log2(VPS4A CN + VPS4B CN + 1)). We correlated this copy number feature with dependencies in the Avana dataset (above).
+
+```{r include=TRUE}
+p8 <- ggplot(correlations_with_dependencies_cn, aes(EffectSize, -log10(p.value), color=Group)) +
+  geom_point() +
+  geom_point(data=correlations_with_dependencies_cn %>% filter(grepl('VPS4[AB]', Gene)), color='red') +
+  geom_text_repel(data=correlations_with_dependencies_cn %>% filter(grepl('VPS4[AB]', Gene)), aes(label=gsub(' .*', '', Gene)), color='black') +
+  guides(color=guide_legend(override.aes = list(size=2))) +
+  ggtitle('Dependency vs. combined VPS4A/B copy number') +
+  scale_color_Publication(breaks=c('Common essential'), na.value='grey') +
+  theme_Publication() + theme(legend.position = 'top', legend.justification = 'left')
+
+p8
+
+ggsave(
+  p8, filename = file.path(plot_saving_directory, 'correlation_dep_combined_cn_dm.pdf'), device = 'pdf',
+  width = 6, height = 6
+)
+```
+
+The table below highlights the top 200 correlated genes (positive or negative) by p.value
+
+```{r include=TRUE}
+correlations_with_dependencies_cn %>%
+  dplyr::select(Gene, Group, everything()) %>%
+  top_n(200, -log10(p.value)) %>%
+  mutate_if(is.numeric, list(~round(.,3))) %>%
+  datatable(options=list(scrollX=T), filter='top')
+```
+
+### VPS4A dependency
+
+Here, we look for dependencies that are correlated with VPS4A dependency. A positive effect coefficient indicates positive correlation with the dependency. 
+
+```{r}
+correlations_quick_vps4a_dep_plot <- gene.effect.corrected %>% 
+  run_lm_stats_limma(., .[,"VPS4A (27183)"]) %>%
+  filter(Gene != 'VPS4A (27183)') %>%
+  mutate(Group=case_when(
+    gsub(' .*', '', Gene) %in% geneIds(gsc_data$GO_biological_process[['GO_MULTIVESICULAR_BODY_ORGANIZATION']]) ~ 'GO_MULTIVESICULAR_BODY_ORGANIZATION',
+    TRUE ~ 'other'
+  ))
+
+correlations_quick_vps4a_dep <- correlations_quick_vps4a_dep_plot  %$%
+  setNames(t_stat, gsub(' .*', '', Gene))
+
+ggplot(correlations_quick_vps4a_dep_plot, aes(EffectSize, -log10(p.value), color=Group)) +
+  geom_point(data=correlations_quick_vps4a_dep_plot %>% filter(Group=='other')) +
+  geom_point(data=correlations_quick_vps4a_dep_plot %>% filter(Group !='other')) +
+  geom_text_repel(data=correlations_quick_vps4a_dep_plot %>% filter(Group != 'other'), aes(label=gsub(' .*', '', Gene))) +
+  xlab('effect coefficient') +
+  theme(legend.position = 'top')
+```
+
+```{r include=FALSE}
+gsea_vps4a_dep <- run_fGSEA(
+  gsc = gsc_data$GO_biological_process,
+  gene_stat = correlations_quick_vps4a_dep,
+  perm_type = 'gene'
+)
+```
+
+```{r}
+gsea_vps4a_dep %>%
+  ggplot(., aes(NES, -log10(pval))) + 
+    geom_point() +
+    geom_text_repel(data=. %>% top_n(10, (NES)), aes(label=pathway), size=6/ggplot2::.pt)
+
+# geneIds(gsc_data$GO_biological_process[['GO_CELL_SEPARATION_AFTER_CYTOKINESIS']])
+```
+
+```{r}
+gsea_vps4a_dep %>%
+  arrange(-NES) %>%
+  top_n(100, NES) %>%
+  datatable(options = list(scrollX=T), filter='top')
+```
+
+## Associated features with VPS4B loss
+
+From Paquita's observation: It seems clear that VPS4B loss is necessary but not sufficient to explain VPS4A dependency. Can we do an analysis only with cell lines with VPS4B loss to see if anything comes up?
+
+In these analyses, we are interested in finding features that are associated with VPS4A dependency in lines that are VPS4B lost.
+
+### Defiining VPS4B loss
+
+We will use a relative log2(CN) cutoff of -0.5 to indicate loss of VPS4B
+
+```{r}
+vps4b_loss_lines <- log2(2^public.CCLE.gene.cn[,"VPS4B (9525)"]-1) %>% .[. < -0.5]
+```
+
+```{r}
+# Intersect with lines in Achilles
+in_achilles_vps4b_lost <- intersect(names(vps4b_loss_lines), row.names(gene.effect.corrected))
+
+stats_vps4a_associated_deps_4bloss_only <- gene.effect.corrected[in_achilles_vps4b_lost,] %>%
+  run_lm_stats_limma(., .[,"VPS4A (27183)"])
+```
+
+```{r}
+# Associated dependencies to VPS4A in VPS4B lost cell lines only
+correlations_quick_vps4a_dep_vps4b_lost_only <- gene.effect.corrected[in_achilles_vps4b_lost,] %>% 
+  run_lm_stats_limma(., gene.effect.corrected[in_achilles_vps4b_lost,"VPS4A (27183)"]) %>%
+  filter(Gene != 'VPS4A (27183)') %>%
+  mutate(Group=case_when(
+    gsub(' .*', '', Gene) %in% geneIds(gsc_data$GO_biological_process[['GO_MULTIVESICULAR_BODY_ORGANIZATION']]) ~ 'GO_MULTIVESICULAR_BODY_ORGANIZATION',
+    TRUE ~ 'other'
+  ))
+
+ggplot(correlations_quick_vps4a_dep_vps4b_lost_only, aes(EffectSize, -log10(p.value), color=Group)) +
+  geom_point(data=correlations_quick_vps4a_dep_vps4b_lost_only %>% filter(Group=='other')) +
+  geom_point(data=correlations_quick_vps4a_dep_vps4b_lost_only %>% filter(Group !='other')) +
+  geom_text_repel(data=correlations_quick_vps4a_dep_vps4b_lost_only %>% filter(Group != 'other'), aes(label=gsub(' .*', '', Gene))) +
+  theme(legend.position = 'top')
+```
+
+```{r include=FALSE}
+t_stat_vps4b_lost_vps4a_dep <- correlations_quick_vps4a_dep_vps4b_lost_only %$%
+  setNames(t_stat, gsub(' .*', '', Gene))
+
+gsea_vps4a_dep_vps4b_loss_only <- run_fGSEA(
+  gsc = gsc_data$GO_biological_process,
+  gene_stat = t_stat_vps4b_lost_vps4a_dep,
+  perm_type = 'gene', stat_type = 'pval'
+)
+```
+
+```{r}
+# gsea_vps4a_dep_vps4b_loss_only %>% arrange(-(NES))
+gsea_vps4a_dep_vps4b_loss_only %>%
+  arrange(-NES) %>% 
+  top_n(100, NES) %>%
+  datatable(options = list(scrollX=T), filter='top')
+```
+
+```{r}
+ggplot(gsea_vps4a_dep_vps4b_loss_only, aes(NES, -log10(pval))) +
+  geom_point() +
+  theme_Publication()
+```
+

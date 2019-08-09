@@ -1,0 +1,190 @@
+---
+title: "VPS4A enrichment plot"
+author: "Guillaume"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: spacelab
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.width = 8, fig.height = 4)
+source('~/Documents/Analysis/RScripts/load_libraries_and_annotations.R')
+
+# setwd('~/Documents/zandra/CPM_paquita/')
+# zho::set_publication_theme()
+fig_colors <- list(red = '#db1923', muted_red = '#c96d6d', blue = '#3883c4', dark_grey = '#666666', medium_grey = '#999999', light_grey = '#c6c6c5', black = '#333333')
+```
+
+```{r echo=TRUE, results='hide'}
+CRISPR_GE <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='Achilles_gene_effect') %>% 
+  magrittr::set_colnames(gsub(' .+', '', colnames(.)))
+
+CRISPR_GD <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='Achilles_gene_dependency') %>% 
+  magrittr::set_colnames(gsub(' .+', '', colnames(.)))
+
+RNAi_GE <- taigr::load.from.taiga(
+  data.name='demeter2-combined-dc9c', 
+  data.version=16, data.file='gene_means_proc', 
+  transpose = T) %>% 
+  magrittr::set_colnames(gsub(' .+', '', colnames(.)))
+
+TPM <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='CCLE_expression') %>% 
+  magrittr::set_colnames(gsub(' .+', '', colnames(.)))
+
+lin_map <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='sample_info') %>%
+  magrittr::set_colnames(gsub('disease_sutype', 'disease_subtype', colnames(.))) %>%
+  dplyr::select(DepMap_ID, CCLE_name, primary_tissue=disease, secondary_tissue=disease_subtype) %>%
+  mutate(primary_tissue=ifelse(CCLE_name=='TTC442_SOFT_TISSUE', 'other', primary_tissue))
+
+plot_saving_directory <- '~/Documents/gkugener/VPS4A/plots/vps4a_dependency_enrichment_plot/'
+dir.create(plot_saving_directory)
+```
+
+### Lineage enrichment for BIRC6 and VPS4A {.tabset}
+
+Highlights epithelial lineages
+
+```{r}
+get_contingency_table <- function(lin, cur_gene) {
+  dep_profile <- CRISPR_GD[, cur_gene]
+  
+  in_group <- lin_map %>% dplyr::filter(primary_tissue == lin) %$% DepMap_ID
+  
+  a <- sum(dep_profile[intersect(in_group, names(dep_profile))] >= 0.5, na.rm = T)
+  b <- sum(dep_profile[setdiff(names(dep_profile), in_group)] >= 0.5, na.rm = T)
+  c <- sum(dep_profile[intersect(in_group, names(dep_profile))] < 0.5, na.rm = T)
+  d <- sum(dep_profile[setdiff(names(dep_profile), in_group)] < 0.5, na.rm = T)
+
+  m <- matrix(c(a,b,c,d), nrow = 2, ncol = 2)
+  return(m)
+}
+
+lineage_enrichment_analysis <- function(cur_gene, fdr_thresh=0.1) {
+  odds <- data.frame()
+  
+  for (lin in unique(lin_map$primary_tissue)) {
+    m <- get_contingency_table(lin, cur_gene)
+    v <- as.vector(m)
+    fisher <- fisher.test(m, alternative = 'greater')
+    
+    odds %<>% rbind(data.frame(
+      a = v[1], b = v[2], c = v[3], d = v[4],
+      lin = lin, odds = fisher$estimate,
+      p.value = fisher$p.value))
+  }
+  # filter out lineages represented less than 5 times
+  odds %<>% 
+    dplyr::filter(a + c >= 5) %>%
+    dplyr::mutate(
+      fdr = p.adjust(p.value, method = 'fdr'),
+      Significance = ifelse(fdr < fdr_thresh, paste0('FDR < ', fdr_thresh), paste0('FDR >= ', fdr_thresh))) %>% 
+    dplyr::arrange(fdr)
+  
+  # plot fishers results
+  fishers_plot <- odds %>% 
+    ggplot(aes(odds, -log10(fdr), color = Significance)) +
+    geom_point() +
+    scale_color_manual(values = c(fig_colors$red, fig_colors$dark_grey)) +
+    scale_shape_manual(values = c(4, 16)) +
+    ggrepel::geom_text_repel(data = subset(odds, fdr < 0.5 | fdr < 0.9), aes(label = lin), show.legend = F) +
+    labs(x = 'Odds Ratio', y = 'False Discovery Rate (-log10)') +
+    theme(legend.position = c(0.2, 0.8), legend.box = 'vertical')
+  
+  long <- CRISPR_GD %>%
+    reshape2::melt(varnames = c('DepMap_ID', 'gene'), value.name = 'PROB') %>%
+    dplyr::filter(gene == cur_gene) %>%
+    dplyr::left_join(lin_map, by = 'DepMap_ID') %>%
+    dplyr::group_by(primary_tissue) %>%
+    dplyr::summarise(
+      num_dep = sum(PROB >= 0.5, na.rm = T),
+      total = n(),
+      perc = 100*num_dep/total) %>%
+    dplyr::filter(total >= 5) %>%
+    dplyr::inner_join(odds, by = c('primary_tissue' = 'lin')) %>% 
+    dplyr::mutate(
+      # is_epithelial = primary_tissue %in% epithelial_primary_tissues,
+      primary_tissue = paste0(primary_tissue, ' (', num_dep, '/', total, ')')) %>%
+    dplyr::arrange(perc)
+  
+  return(list(fishers = fishers_plot, enrich_df = long))
+}
+```
+
+#### VPS4A
+
+```{r}
+obj <- lineage_enrichment_analysis(cur_gene = 'VPS4A', fdr_thresh = 0.2)
+```
+
+```{r fig.width = 4, fig.height = 4}
+obj$fishers
+```
+
+```{r fig.width = 12, fig.height = 6}
+plot_final_vps4a_enrichment_lineage <- obj$enrich_df %>%
+  dplyr::mutate(primary_tissue = factor(primary_tissue, levels = obj$enrich_df$primary_tissue)) %>%
+  ggplot(aes(x = primary_tissue, y = perc, fill = Significance)) +
+  geom_bar(stat = 'identity') +
+  scale_fill_manual(values = c(fig_colors$muted_red, fig_colors$light_grey)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(x = '', y = paste0('% VPS4A-dependent CRISPR Lines')) +
+  theme(
+    plot.title = element_text(size = 10),
+    axis.title = element_text(face = "bold",size = 10),
+    legend.title = element_text(size=10,face="italic"),
+    legend.text = element_text(size=10),
+    axis.text.y = element_text(size = 10),
+    legend.position = c(1, 0),
+    legend.justification = c(1, 0)) +
+  coord_flip()
+
+plot_final_vps4a_enrichment_lineage
+
+ggsave(plot_final_vps4a_enrichment_lineage, filename = file.path(plot_saving_directory, 'lineage_dependency_enrichment.pdf'), width = 16, height = 10, units='cm')
+```
+
+```{r}
+# Simple violin plot of CERES score of VPS4A in lineages
+vps4_dep_lineage <- CRISPR_GE[,c("VPS4A", "VPS4B")] %>%
+  as.data.frame() %>%
+  mutate(DepMap_ID=row.names(.)) %>%
+  gather(gene, score, -DepMap_ID) %>%
+  inner_join(., lin_map, by='DepMap_ID')
+
+types_removed <- vps4_dep_lineage %$% primary_tissue %>% setdiff(gsub(' .*', '', obj$enrich_df$primary_tissue)) 
+colors_case <- gsub(' .*', '', obj$enrich_df$primary_tissue) %>% setNames(rep(fig_colors$light_grey, length(.)), .)
+colors_case[c('rhabdomyosarcoma', 'pancreas')] <- fig_colors$muted_red
+
+vps4_dep_lineage_plot <- vps4_dep_lineage %>% 
+  filter(gene=='VPS4A') %>%
+  filter(!(primary_tissue %in% types_removed)) %>%
+  dplyr::mutate(primary_tissue = factor(primary_tissue, levels = gsub(' .*', '', obj$enrich_df$primary_tissue))) %>%
+  ggplot(aes(x=primary_tissue, y=score, color=primary_tissue)) +
+  # geom_violin() +
+  geom_boxplot() + geom_point(position=position_jitter()) +
+  scale_color_manual(values=colors_case) +
+  labs(x = '', y = paste0('CERES')) +
+  theme(
+    plot.title = element_text(size = 10),
+    axis.title = element_text(face = "bold",size = 10),
+    legend.title = element_text(size=10,face="italic"),
+    legend.text = element_text(size=10),
+    axis.text.x = element_text(size=10, angle=90, hjust=1, vjust=0.5),
+    legend.position = 'none',
+    # legend.justification = c(1, 0)
+  )
+
+ggsave(vps4_dep_lineage_plot, filename = file.path(plot_saving_directory, 'boxplot_lineage_dependency_enrichment.pdf'), width = 16, height = 10, units='cm')
+vps4_dep_lineage_plot
+```
+
+
+
+
+
+

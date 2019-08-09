@@ -1,0 +1,153 @@
+---
+title: "SMAD4 and VPS4B loss"
+author: "Guillaume Kugener"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = FALSE, warning = FALSE, message = FALSE)
+source('~/Documents/gkugener/RScripts/load_libraries_and_annotations.R')
+```
+
+```{r echo=TRUE, results='hide'}
+sample.info <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='sample_info')
+
+CCLE.segmented.cn <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='CCLE_segmented_cn')
+CCLE.gene.cn <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='CCLE_gene_cn')
+```
+
+```{r}
+# From the load_libraries_and_annotations.R script in thise repo
+mf <- pull_mf(sample.info)
+
+genome_version = ifelse(ncol(CCLE.gene.cn)==23299, 'hg19', 'hg38') # In future release, we will be using hg38 coordinates. We can tell based on the number of genes in the gene level CN matrix
+
+gene_coordinates <- load_gene_mapping(genome_version = genome_version) %>%
+  filter(SYMBOL %in% c('SMAD4', 'VPS4B'))
+```
+
+```{r eval=FALSE}
+cds_render('~/Documents/Analysis/VPS4A/smad4_vps4a_co_loss.Rmd', folder = 'VPS4A', path_to_html = '~/Documents/Analysis/VPS4A/smad4_vps4a_co_loss.html')
+```
+
+```{r}
+# Plot SMAD4 loss vs. VPS4B loss
+smad4_vps4b <- log2(2^CCLE.gene.cn[,c("VPS4B (9525)", "SMAD4 (4089)")]-1) %>%
+  as.data.frame() %>%
+  mutate(DepMap_ID=row.names(.)) %>% 
+  mutate(`SMAD4 capped`=ifelse(`SMAD4 (4089)` < -5, -5, `SMAD4 (4089)`)) %>%
+  left_join(., mf %>% dplyr::select(DepMap_ID, Type), by=c('DepMap_ID'))
+```
+
+For the sake of visibility in the plot below, I capped the log2(CN) of SMAD4 in cell lines to -5. As we can see, there is a high agreement between SMAD4 and VPS4B, likely because they are often lost together given their positioning. However, there are lines that appear to have loss of VPS4B only. These lines are highlighted in red.
+
+Note: In red are lines that have log2(SMAD4 CN) > -0.5 and log2(VPS4B) < -1.
+
+```{r include=TRUE}
+ggplot(smad4_vps4b, 
+       aes(`VPS4B (9525)`, `SMAD4 capped`)) +
+  geom_point() +
+  xlab('VPS4B log2(CN)') + ylab('SMAD4 log2(CN)') +
+  geom_point(data=smad4_vps4b %>% filter(`SMAD4 capped` > -0.5, `VPS4B (9525)` < -1), color='red') +
+  geom_text_repel(data=smad4_vps4b %>% filter(`SMAD4 capped` > -0.5, `VPS4B (9525)` < -1), aes(label=gsub('_.*', '', arxspan.to.ccle(DepMap_ID))), color='red', size=2)
+```
+
+```{r}
+# Look at which of 
+cell_lines_with_potential_pointed <- smad4_vps4b %>% filter(`SMAD4 capped` > -0.5, `VPS4B (9525)` < -1) %$% DepMap_ID
+
+# Look at SMAD4, VPS4B breakpoints
+areas_of_interest_smad4_vps4b <- CCLE.segmented.cn %>% 
+  filter(Chromosome==18) %>%
+  mutate(CCLE_name=gsub('_.*', '', CCLE_name))
+
+# Gene positions with CN
+annotations_genes <- gene_coordinates %>%
+  dplyr::select(gene=SYMBOL, Chromosome=CHR, Start=CHRLOC, End=CHRLOCEND) %>%
+  left_join(., 
+    smad4_vps4b %>% 
+      dplyr::select(-`SMAD4 capped`) %>% 
+      gather(gene, Segment_Mean, -DepMap_ID) %>%
+      mutate(gene=gsub(' .*', '', gene)),
+    by=c('gene')) %>%
+  mutate(CCLE_name=gsub('_.*', '', arxspan.to.ccle(DepMap_ID))) %>%
+  mutate(Segment_Mean=as.numeric(Segment_Mean))
+```
+
+The plots below visualize where the breakpoints on chr18. Again in these plots, the CN values are capped at log2(CN) = -5
+
+```{r include=TRUE, fig.height=20}
+ggplot(areas_of_interest_smad4_vps4b %>% 
+         filter(DepMap_ID %in% cell_lines_with_potential_pointed) %>% 
+         mutate(Segment_Mean=ifelse(log2(Segment_Mean) < -5, -5, log2(Segment_Mean))), 
+       aes(x=Start, xend=End, y=Segment_Mean, yend=Segment_Mean)) +
+  geom_step(linetype=3) + 
+  geom_segment(size=2, color='grey') +
+  xlab('Position on chr18') + ylab('log2(CN)') +
+  geom_point(data=annotations_genes %>% 
+               filter(DepMap_ID %in% cell_lines_with_potential_pointed) %>% 
+               mutate(Segment_Mean=ifelse((Segment_Mean) < -5, -5, (Segment_Mean))), 
+             aes(x=Start), color='orange') +
+  geom_text_repel(data=annotations_genes %>% 
+                    filter(DepMap_ID %in% cell_lines_with_potential_pointed) %>% 
+                    mutate(Segment_Mean=ifelse((Segment_Mean) < -5, -5, (Segment_Mean))), 
+               aes(x=Start, label=gene)) +
+  facet_wrap(~CCLE_name, ncol=2)
+```
+
+```{r eval=FALSE}
+areas_of_interest_smad4_vps4b %>%
+  # filter(Start < 61056423, End > 48611415) %>%
+  mutate(s=log(Segment_Mean)) %>%
+  mutate(l=End-Start)
+```
+
+## Particular cell lines
+
+```{r}
+specific_cell_lines <- c('SMSCTR', 'PANC0403', 'SNU213', 'COV413A', 'JR', 'RD')
+specific_cell_lines <- c('SMSCTR', 'COV413A', 'JR', 'RD')
+part_cls_smad4_vps4b <- areas_of_interest_smad4_vps4b %>% 
+  mutate(Segment_Mean=ifelse(log2(Segment_Mean) < -5, -5, log2(Segment_Mean))) %>%
+  filter(gsub('_.*', '', arxspan.to.ccle(DepMap_ID)) %in% specific_cell_lines)
+```
+
+```{r}
+particular_cls_chr18_breakpoints <- ggplot(part_cls_smad4_vps4b, 
+       aes(x=Start, xend=End, y=Segment_Mean, yend=Segment_Mean)) +
+  geom_step(linetype=3) + 
+  geom_segment(size=2, color='grey') +
+  xlab('Position on chr18 (Mb)') + ylab('log2(CN)') +
+  scale_x_continuous(breaks=c(0, 2, 4, 6, 8)*10^7, labels = c(0,20,40,60,80)) +
+  geom_point(data=annotations_genes %>% 
+               filter(gsub('_.*', '', arxspan.to.ccle(DepMap_ID)) %in%specific_cell_lines) %>%
+               mutate(Segment_Mean=ifelse((Segment_Mean) < -5, -5, (Segment_Mean))), 
+             aes(x=Start), color='orange') +
+  geom_text_repel(data=annotations_genes %>% 
+                filter(gsub('_.*', '', arxspan.to.ccle(DepMap_ID)) %in% specific_cell_lines) %>%
+                mutate(Segment_Mean=ifelse((Segment_Mean) < -5, -5, (Segment_Mean))),
+              aes(x=Start, label=gene), size=10/ggplot2::.pt) +
+  facet_wrap(~CCLE_name, ncol=2) +
+  theme_Publication() +
+  theme(
+    text=element_text(size=10),
+    title = element_text(size=16)
+  )
+
+particular_cls_chr18_breakpoints
+
+ggsave(particular_cls_chr18_breakpoints, filename = '~/Documents/gkugener/VPS4A/plots/particular_cls_chr18_breakpoints.pdf', width=16, height=16, units='cm')
+```
+
+<!-- ## In TCGA -->
+
+```{r}
+# Don't have the segmented level calls for the TCGA data to be able to do this.
+```
+
+
+
+
+
+
