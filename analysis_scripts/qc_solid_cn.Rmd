@@ -7,7 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, include=FALSE, message = FALSE, warning = FALSE)
-source('~/Documents/gkugener/RScripts/load_libraries_and_annotations.R')
+source('../../gkugener/RScripts/load_libraries_and_annotations.R')
 ```
 
 ```{r echo=FALSE, results='hide'}
@@ -18,9 +18,9 @@ solid.wes.normal.segmented.cn <- load.from.taiga(data.name='rms-nih-936f', data.
 solid.wes.tumor.gene.level.cn <- load.from.taiga(data.name='rms-nih-936f', data.version=7, data.file='solid_wes_tumor_gene_level_cn')
 solid.wes.tumor.segmented.cn <- load.from.taiga(data.name='rms-nih-936f', data.version=7, data.file='solid_wes_tumor_segmented_cn')
 
-cyto_band_file <- '~/Documents/Analysis/RScripts/Common_annotations/hg19_cytoBand.txt.gz'
+cyto_band_file <- '../../JKBio/data/hg19_cytoBand.txt.gz'
 
-plot_saving_directory <- '~/Documents/gkugener/VPS4A/plots/qc_solid/'
+plot_saving_directory <- '../plots/qc_solid/'
 dir.create(plot_saving_directory)
 ```
 
