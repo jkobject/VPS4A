@@ -8,17 +8,17 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, include=FALSE, warning = FALSE, message = FALSE)
 
-source('~/Documents/gkugener/RScripts/load_libraries_and_annotations.R')
+source('~/Documents/Projects/BroadInstitute/gkugener/RScripts/load_libraries_and_annotations.R')
 ```
 
 ```{r echo=TRUE, results='hide'}
-plot_saving_directory <- '~/Documents/gkugener/VPS4A/plots/cn_in_tcga/'
+plot_saving_directory <- '../plots/cn_in_tcga/'
 dir.create(plot_saving_directory)
 ```
 
 ```{r eval=FALSE}
 # To push this to CDS_Projects
-cds_render(path_to_rmd = '~/Documents/gkugener/VPS4A/cn_in_tcga.Rmd', folder = 'VPS4A', path_to_html = '~/Documents/gkugener/VPS4A/cn_in_tcga.html')
+cds_render(path_to_rmd = '~/Documents/Projects/BroadInstitute/VPS4A/analysis_scripts/cn_in_tcga.Rmd', folder = 'VPS4A', path_to_html = '~/Documents/Projects/BroadInstitute/VPS4A/html_reports/cn_in_tcga.html')
 ```
 
 ```{r echo=TRUE, results='hide'}
@@ -165,12 +165,12 @@ vps4a_b_only %<>% mutate(`Loss type`=ifelse(CN < loss_thresholds_list['deep'], '
 vps4a_b_only %>%
   filter(`Gene Symbol`=='VPS4B') %>%
   dplyr::rename(relative_cn=CN) %>%
-  write.table(., file = '~/Documents/Analysis/VPS4A/tables/tcga_vps4b_copy_number.tsv', sep = '\t', quote = F, row.names = F)
+  write.table(., file = '~/Documents/Projects/BroadInstitute/VPS4A/tcga_vps4b_copy_number.tsv', sep = '\t', quote = F, row.names = F)
 
 vps4a_b_only %>%
   filter(`Gene Symbol`=='VPS4A') %>%
   dplyr::rename(relative_cn=CN) %>%
-  write.table(., file = '~/Documents/Analysis/VPS4A/tables/tcga_vps4a_copy_number.tsv', sep = '\t', quote = F, row.names = F)
+  write.table(., file = '~/Documents/Projects/BroadInstitute/VPS4A/tcga_vps4a_copy_number.tsv', sep = '\t', quote = F, row.names = F)
 
 
 vps4a_b_only %>%
@@ -180,7 +180,7 @@ vps4a_b_only %>%
   dplyr::summarise(count=n()) %>% mutate(fraction=count/total) %>%
   mutate_if(is.numeric, funs(round(.,3))) %>%
   dplyr::rename(`total samples in context`=total) %>%
-  write.table(., file = '~/Documents/Analysis/VPS4A/tables/vps4ab_copy_number_by_cancer_type.tsv', sep = '\t', quote = F, row.names = F)
+  write.table(., file = '~/Documents/Projects/BroadInstitute/VPS4A/vps4ab_copy_number_by_cancer_type.tsv', sep = '\t', quote = F, row.names = F)
 ```
 
 The table below outlines the numbers for types of CN events for VPS4A and VPS4B in the TCGA data.
@@ -353,10 +353,12 @@ We generated a similar plots in CCLE. We are interested to see where the relatio
 tcga.expression.data <- load.from.taiga(data.name='rnaseq-7cdc', data.version=1, data.file='expression_tpm')
 change_row_names <- row.names(tcga.expression.data) %>% stringr::str_extract(pattern='ENSGR?[0-9]+', string=.)
 row.names(tcga.expression.data) <- change_row_names
+```
 
+
+```{r}
 # We only want coding genes for this analysis
-hg29_ids <- read_csv('~/Documents/Analysis/RScripts/Common_annotations/v29_ensembl_hgnc_gene_names.csv') %>%
-  filter(hgnc_id %in% gsub(' .*', '', colnames(public.CCLE.expression))) %>%
+hg29_ids <- read_csv('~/Documents/Projects/BroadInstitute/gkugener/RScripts/Common_annotations/v29_ensembl_hgnc_gene_names.csv') %>%
   filter(ensembl_gene_id %in% stringr::str_extract(pattern='ENSG[0-9]+', string=row.names(tcga.expression.data))) %$%
   setNames(hgnc_id, ensembl_gene_id)
 
@@ -380,7 +382,17 @@ cn_profile_matrix <- cn_profiles %>%
 ```
 
 ```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+# you need to have installed "pkg-config cairo libpng jpeg giflib" with brew or apt..
+BiocManager::install(c("GO.db","impute","preprocessCore", "latticeExtra"))
+install.packages('WGCNA',)
+```
+```{rzz}
 library(WGCNA)
+```
+```{r}
+install.packages("impute", "preprocessCore", "GO.db")
 ```
 
 ```{r}
@@ -388,8 +400,8 @@ overlapping_tcga_cn_tpm <- intersect(row.names(cn_profile_matrix), row.names(tcg
 common_genes_between_tcga_datatsets <- intersect(colnames(cn_profile_matrix), colnames(tcga.expression.data))
 
 # Randomly sample 4000 genes from each dataset (including VPS4A and VPS4B in both)
-tcga_genes_chosen <- sample(common_genes_between_tcga_datatsets, size=4000)
-tcga_genes_chosen <- c(tcga_genes_chosen, c("VPS4A", "VPS4B")) %>% unique()
+tcga_genes_chosen <- sample(common_genes_between_tcga_datatsets, size=300)
+tcga_genes_chosen <- c(common_genes_between_tcga_datatsets, c("VPS4A", "VPS4B")) %>% unique()
 
 # Think about removing non-expressed genes?
 correlations_matrix_cn_rnaseq_tcga <- WGCNA::cor(

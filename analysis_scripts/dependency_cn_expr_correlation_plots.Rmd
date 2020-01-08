@@ -7,7 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
-source('~/Documents/gkugener/RScripts/load_libraries_and_annotations.R')
+source('~/Documents/Projects/BroadInstitute/gkugener/RScripts/load_libraries_and_annotations.R')
 ```
 
 ```{r echo=TRUE, results='hide'}
@@ -17,7 +17,7 @@ CCLE.expression <- load.from.taiga(data.name='public-19q2-5572', data.version=10
 Achilles.gene.effect <- load.from.taiga(data.name='public-19q2-5572', data.version=10, data.file='Achilles_gene_effect')
 D2_ge <- load.from.taiga(data.name='demeter2-combined-dc9c', data.version=16, data.file='gene_effect')
 
-plot_saving_directory <- '~/Documents/gkugener/VPS4A/plots/dependency_cn_expr_correlation_plots/'
+plot_saving_directory <- '~/Documents/Projects/BroadInstitute/gkugener/VPS4A/plots/dependency_cn_expr_correlation_plots/'
 dir.create(plot_saving_directory)
 ```
 

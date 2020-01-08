@@ -7,7 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, include = FALSE, warning = FALSE, message = FALSE)
-source('~/Documents/gkugener/RScripts/load_libraries_and_annotations.R')
+source('../../gkugener/RScripts/load_libraries_and_annotations.R')
 ```
 
 ```{r echo=TRUE, results='hide'}
@@ -28,7 +28,7 @@ gene_coordinates <- load_gene_mapping(genome_version = genome_version) %>%
 ```
 
 ```{r eval=FALSE}
-cds_render('~/Documents/Analysis/VPS4A/smad4_vps4a_co_loss.Rmd', folder = 'VPS4A', path_to_html = '~/Documents/Analysis/VPS4A/smad4_vps4a_co_loss.html')
+cds_render('../analysis_scripts/smad4_vps4a_co_loss.Rmd', folder = 'VPS4A', path_to_html = '../html_reports/smad4_vps4a_co_loss.html')
 ```
 
 ```{r}
@@ -49,8 +49,17 @@ ggplot(smad4_vps4b,
        aes(`VPS4B (9525)`, `SMAD4 capped`)) +
   geom_point() +
   xlab('VPS4B log2(CN)') + ylab('SMAD4 log2(CN)') +
-  geom_point(data=smad4_vps4b %>% filter(`SMAD4 capped` > -0.5, `VPS4B (9525)` < -1), color='red') +
-  geom_text_repel(data=smad4_vps4b %>% filter(`SMAD4 capped` > -0.5, `VPS4B (9525)` < -1), aes(label=gsub('_.*', '', arxspan.to.ccle(DepMap_ID))), color='red', size=2)
+  annotate("text",x=2,y=-3,label = "italic(R)^2==0.25", parse=TRUE) +
+  ggtitle("VPS4B CN to VPS4B CN for all 1627 samples in DepMapOmics")
+
+ggsave(filename = "../../plots/vps4btosmad4.pdf")
+```
+
+correlation of 0.251
+1627 samples 
+
+```{r include=TRUE}
+cor(smad4_vps4b %>% dplyr::select(`VPS4B (9525)`,`SMAD4 (4089)`))
 ```
 
 ```{r}
